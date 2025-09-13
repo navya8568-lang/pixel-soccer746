@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pixel Soccer — Slow with Move List</title>
+<style>
+  :root { --scale: 3; }
+  html,body{height:100%;margin:0;background:#1b5e20;display:flex;align-items:center;justify-content:center;font-family:system-ui,Segoe UI,Roboto,Arial}
+  #screen { image-rendering: pixelated; image-rendering: crisp-edges; border:8px solid #083012; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+  .ui { position: fixed; top: 18px; left: 18px; color:#fff; font-weight:700; text-shadow:0 1px 0 rgba(0,0,0,0.6) }
+  .controls { position: fixed; bottom:18px; left:18px; color:#fff; font-size:13px }
+  .center { position: fixed; top:18px; right:18px; color:#fff; text-align:right }
+  #message { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); color:#fff; font-size:32px; font-weight:bold; text-shadow:0 2px 4px #000 }
+  .moves {
+    position: fixed;
+    bottom: 18px;
+    right: 18px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .moves h3 {
+    margin: 0 0 4px;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<canvas id="screen" width="320" height="180" style="width:calc(320px * var(--scale));height:calc(180px * var(--scale));"></canvas>
+<div class="ui">Score: <span id="score">0 - 0</span></div>
+<div class="center">Time: <span id="time">60</span>s</div>
+<div class="controls">R to restart</div>
+<div class="moves">
+  <h3>Move List</h3>
+  <ul>
+    <li><b>Arrow Keys</b> – Move Player</li>
+    <li><b>Z</b> – Kick the Ball</li>
+    <li><b>R</b> – Restart the Match</li>
+  </ul>
+</div>
+<div id="message"></div>
+<script>
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const W = canvas.width, H = canvas.height;
+const field = { x: 8, y: 8, w: W-16, h: H-16 };
+let keys = {};
+window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; if(e.key.toLowerCase()==='r') init(); });
+window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+let player, ai, ball, scores, timer, running, countdown;
+function init(){
+  player = { x: W*0.25, y: H/2, vx:0, vy:0, w:6, h:8, color: [255,200,40] };
+  ai = { x: W*0.75, y: H/2, vx:0, vy:0, w:6, h:8, color: [40,160,255] };
+  ball = { x: W/2, y: H/2, vx:0, vy:0, r:3, lastTouched: null };
+  scores = { p:0, a:0 };
+  timer = 60;
+  countdown = 3;
+  running = false;
+  document.getElementById('score').innerText = `${scores.p} - ${scores.a}`;
+  document.getElementById('time').innerText = timer;
+  startCountdown();
+}
+function startCountdown(){
+  const msgDiv=document.getElementById('message');
+  msgDiv.innerText = countdown;
+  const interval=setInterval(()=>{
+    countdown--;
+    if(countdown>0){
+      msgDiv.innerText=countdown;
+    } else {
+      clearInterval(interval);
+      msgDiv.innerText='Kick Off!';
+      setTimeout(()=>{ msgDiv.innerText=''; running=true;},1000);
+    }
+  },1000);
+}
+// slower speeds
+const maxSpeed = 1.0;   // slower top speed
+const accel = 0.15;     // slower acceleration
+const friction = 0.92;
+const kickStrength = 3.2;
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+function update(dt){
+  if(!running) return;
+  let ax=0, ay=0;
+  if(keys['arrowleft']) ax -= accel;
+  if(keys['arrowright']) ax += accel;
+  if(keys['arrowup']) ay -= accel;
+  if(keys['arrowdown']) ay += accel;
+  player.vx += ax; player.vy += ay;
+  player.vx *= friction; player.vy *= friction;
+  player.vx = clamp(player.vx, -maxSpeed, maxSpeed);
+  player.vy = clamp(player.vy, -maxSpeed, maxSpeed);
+  player.x += player.vx; player.y += player.vy;
+  player.x = clamp(player.x, field.x+2, field.x+field.w-player.w-2);
+  player.y = clamp(player.y, field.y+2, field.y+field.h-player.h-2);
+  const dx = ball.x - ai.x; const dy = ball.y - ai.y; const dist = Math.hypot(dx,dy);
+  if(dist > 12){ ai.vx += (dx/dist) * 0.06; ai.vy += (dy/dist) * 0.06; } // slower AI
+  ai.vx *= 0.94; ai.vy *= 0.94;
+  ai.x += ai.vx; ai.y += ai.vy;
+  ai.x = clamp(ai.x, field.x+2, field.x+field.w-ai.w-2);
+  ai.y = clamp(ai.y, field.y+2, field.y+field.h-ai.h-2);
+  ball.x += ball.vx; ball.y += ball.vy;
+  ball.vx *= 0.985; ball.vy *= 0.985;
+  handlePlayerBallCollision(player);
+  handlePlayerBallCollision(ai);
+  // Bounce off top and bottom edges
+  if(ball.y - ball.r < field.y){ ball.y=field.y+ball.r; ball.vy=Math.abs(ball.vy); }
+  if(ball.y + ball.r > field.y+field.h){ ball.y=field.y+field.h-ball.r; ball.vy=-Math.abs(ball.vy); }
+  // Bounce off left and right if not a goal area
+  if(ball.x - ball.r < field.x && !(ball.y > H/2 - 18 && ball.y < H/2 + 18)){
+    ball.x=field.x+ball.r; ball.vx=Math.abs(ball.vx);
+  }
+  if(ball.x + ball.r > field.x+field.w && !(ball.y > H/2 - 18 && ball.y < H/2 + 18)){
+    ball.x=field.x+field.w-ball.r; ball.vx=-Math.abs(ball.vx);
+  }
+  // Goals
+  if(ball.x - ball.r <= field.x){
+    if(ball.y > H/2 - 18 && ball.y < H/2 + 18){ scores.a++; scoreGoal(); }
+  }
+  if(ball.x + ball.r >= field.x+field.w){
+    if(ball.y > H/2 - 18 && ball.y < H/2 + 18){ scores.p++; scoreGoal(); }
+  }
+}
+function scoreGoal(){
+  ball.x = W/2; ball.y = H/2; ball.vx = 0; ball.vy = 0;
+  player.x = W*0.25; player.y = H/2; player.vx=0; player.vy=0;
+  ai.x = W*0.75; ai.y = H/2; ai.vx=0; ai.vy=0;
+  document.getElementById('score').innerText = `${scores.p} - ${scores.a}`;
+  running = false; document.getElementById('message').innerText='Goal!';
+  setTimeout(()=>{document.getElementById('message').innerText=''; running=true;},1000);
+}
+function handlePlayerBallCollision(pl){
+  const nearestX = clamp(ball.x, pl.x, pl.x + pl.w);
+  const nearestY = clamp(ball.y, pl.y, pl.y + pl.h);
+  const dx = ball.x - nearestX, dy = ball.y - nearestY;
+  const dist = Math.hypot(dx,dy);
+  if(dist < ball.r + 1.0){
+    const nx = dx/dist || 0; const ny = dy/dist || 0;
+    ball.x = nearestX + nx * (ball.r + 1.0);
+    ball.y = nearestY + ny * (ball.r + 1.0);
+    ball.vx = pl.vx*1.4 + nx * 0.6;
+    ball.vy = pl.vy*1.4 + ny * 0.6;
+    if(pl === player && keys['z']){
+      ball.vx += nx * kickStrength;
+      ball.vy += ny * kickStrength;
+    }
+    if(pl === ai){
+      const goalX = field.x;
+      const tx = goalX - ball.x; const ty = (H/2) - ball.y; const d = Math.hypot(tx,ty)||1;
+      ball.vx = (tx/d) * kickStrength * 0.9;
+      ball.vy = (ty/d) * kickStrength * 0.9;
+    }
+    ball.lastTouched = (pl===player)?'player':'ai';
+  }
+}
+setInterval(()=>{ if(running){ timer--; document.getElementById('time').innerText = timer; if(timer<=0){ running=false; showFinal(); } } }, 1000);
+function showFinal(){
+  const msg = scores.p > scores.a ? 'You win!' : (scores.p < scores.a ? 'You lose' : 'Draw');
+  setTimeout(()=> alert(`Time up! ${msg} Final: ${scores.p} - ${scores.a}`), 120);
+}
+function drawPitch(){
+  ctx.fillStyle = '#2e7d32'; ctx.fillRect(0,0,W,H);
+  for(let i=0;i<6;i++){
+    const stripeW = field.w/6;
+    ctx.fillStyle = i%2? '#338a3e' : '#2e7d32';
+    ctx.fillRect(field.x + i*stripeW, field.y, stripeW, field.h);
+  }
+  ctx.strokeStyle = '#053812'; ctx.lineWidth = 2; ctx.strokeRect(field.x, field.y, field.w, field.h);
+  ctx.fillStyle='#fff'; ctx.fillRect(W/2 - 1, field.y+6, 2, field.h-12);
+  ctx.beginPath(); ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.arc(W/2, H/2, 18, 0, Math.PI*2); ctx.stroke();
+  ctx.fillStyle='#ffffff33'; ctx.fillRect(field.x-6, H/2-18, 6, 36); ctx.fillRect(field.x+field.w, H/2-18, 6, 36);
+}
+function drawSpriteBox(x,y,w,h, cols){
+  ctx.fillStyle = `rgb(${cols[0]},${cols[1]},${cols[2]})`;
+  ctx.fillRect(Math.round(x), Math.round(y), w, h);
+  ctx.strokeStyle = '#08220f'; ctx.lineWidth = 1; ctx.strokeRect(Math.round(x), Math.round(y), w, h);
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  drawPitch();
+  ctx.fillStyle = '#00000022'; ctx.fillRect(ball.x-1, ball.y+3, ball.r*2, 2);
+  ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2); ctx.fill();
+  drawSpriteBox(player.x, player.y, player.w, player.h, player.color);
+  drawSpriteBox(ai.x, ai.y, ai.w, ai.h, ai.color);
+}
+let last = 0;
+function loop(ts){
+  if(!last) last = ts;
+  const dt = (ts-last)/16.6667; last = ts;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+init(); requestAnimationFrame(loop);
+canvas.addEventListener('click', ()=> canvas.focus());
+</script>
+</body>
+</html>
+
